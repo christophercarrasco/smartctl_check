@@ -3,10 +3,10 @@ set -o pipefail
 
 bad=0
 
-while read dev mr; do
+while read -r dev mr; do
     idx=${mr#megaraid,}
 
-    out=$(smartctl -a -d megaraid,$idx "$dev" 2>/dev/null) || continue
+    out=$(smartctl -a -d megaraid,"$idx" "$dev" 2>/dev/null) || continue
 
     echo "$out" | grep -Eq "Device Model|Model Number" || continue
 
