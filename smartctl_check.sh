@@ -33,12 +33,20 @@ while read -r dev mr; do
     # Horas encendido (ID 9)
     hours=$(echo "$out" | grep -E "^\s*9\s+" | awk '{print $10}')
 
-    # Vida útil
+    # ==========================================
+    # Lógica específica por fabricante (LIFE y TBW)
+    # ==========================================
     if [[ "$model" == *"SAMSUNG"* ]]; then
         raw_life=$(echo "$out" | grep -E "^\s*177\s+" | awk '{print $4}')
+        tbw_raw=$(echo "$out" | grep -E "^\s*241\s+" | awk '{print $10}')
+    elif [[ "$model" == *"TOSHIBA"* || "$model" == *"KHK61"* ]]; then
+        raw_life=$(echo "$out" | grep -E "^\s*233\s+" | awk '{print $4}')
+        tbw_raw=$(echo "$out" | grep -E "^\s*241\s+" | awk '{print $10}')
     else
         raw_life=$(echo "$out" | grep -E "^\s*202\s+" | awk '{print $10}')
+        tbw_raw=$(echo "$out" | grep -E "^\s*246\s+" | awk '{print $10}')
     fi
+
     life=$(echo "$raw_life" | sed 's/^0*//')
     [[ -z "$life" ]] && life=100
 
@@ -54,14 +62,6 @@ while read -r dev mr; do
 
     # Temperatura
     temp=$(echo "$out" | grep -Ei "Temperature_Celsius" | awk '{print $10}')
-
-    # Total Writes / TBW
-    tbw_raw=$(echo "$out" | grep -Ei "Total_LBAs_Written|Host_Writes|Data_Units_Written" | awk '{print $10}' | head -n1)
-
-    # TBW específico Micron 5200 (atributo 246)
-    if [[ "$model" == *"Micron"* ]]; then
-        tbw_raw=$(echo "$out" | grep -E "^\s*246\s+" | awk '{print $10}')
-    fi
 
     # Sanitización
     [[ ! "$hours" =~ ^[0-9]+$ ]] && hours=0
