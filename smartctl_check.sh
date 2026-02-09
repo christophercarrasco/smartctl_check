@@ -18,9 +18,9 @@ report_data=""
 devices=$(smartctl --scan | awk '/megaraid/ {for (i=1;i<=NF;i++) if ($i=="-d") print $1, $(i+1)}')
 
 echo "--- STORAGE HEALTH SYSTEM AUDIT (STRICT MODE) ---"
-printf "%-10s %-8s %-6s %-10s %-6s %-7s %-6s %-6s %-15s\n" \
-"STATUS" "ID" "LIFE%" "HOURS" "CRC" "REALLOC" "PWR" "TEMP" "MODEL"
-echo "---------------------------------------------------------------------------------------------"
+printf "%-10s %-8s %-6s %-10s %-6s %-7s %-6s %-6s %-15s %-20s\n" \
+"STATUS" "ID" "LIFE%" "HOURS" "CRC" "REALLOC" "PWR" "TEMP" "MODEL" "SERIAL"
+echo "----------------------------------------------------------------------------------------------------"
 
 while read -r dev mr; do
     idx=${mr#megaraid,}
@@ -30,6 +30,8 @@ while read -r dev mr; do
     [[ -z "$out" ]] && continue
 
     model=$(echo "$out" | grep -Ei "Device Model|Model Number" | awk -F: '{print $2}' | xargs)
+    serial=$(echo "$out" | grep -Ei "Serial Number|Serial No." | awk -F: '{print $2}' | xargs)
+    [[ -z "$serial" ]] && serial="UNKNOWN"
 
     # Horas encendido (ID 9)
     hours=$(echo "$out" | grep -E "^\s*9\s+" | awk '{print $10}')
@@ -86,7 +88,7 @@ while read -r dev mr; do
     if (( 10#$life <= LIFE_THRESHOLD )) || (( realloc > 0 )); then
         status="CRITICAL"
         flags+="LOW_LIFE/REALLOC "
-        critical_disks+=("ID:$idx ($model)")
+        critical_disks+=("ID:$idx ($model $serial)")
     elif (( media_err > 0 )); then
         status="FAIL"
         flags+="MEDIA_ERR "
@@ -113,11 +115,11 @@ while read -r dev mr; do
     esac
 
     # Output humano
-    printf "${color}%-10s\033[0m %-8s %-6s %-10s %-6s %-7s %-6s %-6s %-15s\n" \
-        "[$status]" "ID:$idx" "${life}%" "$hours" "$crc_err" "$realloc" "$unsafe_pwr" "${temp}C" "$model"
+    printf "${color}%-10s\033[0m %-8s %-6s %-10s %-6s %-7s %-6s %-6s %-15s %-20s\n" \
+        "[$status]" "ID:$idx" "${life}%" "$hours" "$crc_err" "$realloc" "$unsafe_pwr" "${temp}C" "$model" "$serial"
 
     # JSON machine-readable
-    report_data+="{\"id\":$idx,\"model\":\"$model\",\"status\":\"$status\",\"life\":$life,\
+    report_data+="{\"id\":$idx,\"model\":\"$model\",\"serial\":\"$serial\",\"status\":\"$status\",\"life\":$life,\
 \"hours\":$hours,\"crc\":$crc_err,\"realloc\":$realloc,\
 \"media_err\":$media_err,\"unsafe_pwr\":$unsafe_pwr,\
 \"temp\":$temp,\"tbw_tb\":$tbw_tb},"
