@@ -20,7 +20,7 @@ devices=$(smartctl --scan | awk '/megaraid/ {for (i=1;i<=NF;i++) if ($i=="-d") p
 echo "--- STORAGE HEALTH SYSTEM AUDIT (STRICT MODE) ---"
 printf "%-10s %-8s %-6s %-10s %-6s %-7s %-6s %-6s %-20s %-25s\n" \
 "STATUS" "ID" "LIFE%" "HOURS" "CRC" "REALLOC" "PWR" "TEMP" "SERIAL" "MODEL"
-echo "----------------------------------------------------------------------------------------------------"
+echo "-------------------------------------------------------------------------------------------------------------------"
 
 while read -r dev mr; do
     idx=${mr#megaraid,}
