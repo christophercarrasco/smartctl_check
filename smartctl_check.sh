@@ -19,7 +19,7 @@ devices=$(smartctl --scan | awk '/megaraid/ {for (i=1;i<=NF;i++) if ($i=="-d") p
 
 echo "--- STORAGE HEALTH SYSTEM AUDIT (STRICT MODE) ---"
 printf "%-10s %-8s %-6s %-10s %-6s %-7s %-6s %-6s %-20s %-25s\n" \
-"STATUS" "ID" "LIFE%" "HOURS" "CRC" "REALLOC" "PWR" "TEMP" "MODEL" "SERIAL"
+"STATUS" "ID" "LIFE%" "HOURS" "CRC" "REALLOC" "PWR" "TEMP" "SERIAL" "MODEL"
 echo "----------------------------------------------------------------------------------------------------"
 
 while read -r dev mr; do
@@ -116,7 +116,7 @@ while read -r dev mr; do
 
     # Output humano
     printf "${color}%-10s\033[0m %-8s %-6s %-10s %-6s %-7s %-6s %-6s %-20s %-25s\n" \
-        "[$status]" "ID:$idx" "${life}%" "$hours" "$crc_err" "$realloc" "$unsafe_pwr" "${temp}C" "$model" "$serial"
+        "[$status]" "ID:$idx" "${life}%" "$hours" "$crc_err" "$realloc" "$unsafe_pwr" "${temp}C" "$serial" "$model"
 
     # JSON machine-readable
     report_data+="{\"id\":$idx,\"model\":\"$model\",\"serial\":\"$serial\",\"status\":\"$status\",\"life\":$life,\
