@@ -3,12 +3,12 @@ set -o pipefail
 
 bad=0
 
-while read -r dev mr; do
+while read dev mr; do
     idx=${mr#megaraid,}
 
-    out=$(smartctl -a -d megaraid,"$idx" "$dev" 2>/dev/null) || continue
+    out=$(smartctl -a -d megaraid,$idx "$dev" 2>/dev/null) || continue
 
-    echo "$out" | grep -q "Device Model" || continue
+    echo "$out" | grep -Eq "Device Model|Model Number" || continue
 
     status="OK"
 
@@ -27,6 +27,13 @@ while read -r dev mr; do
     echo "[$status] $dev megaraid,$idx"
 
     [[ "$status" == "BAD" ]] && bad=1
-done < <(sudo smartctl --scan | awk '/megaraid/ {print $1, $NF}')
+done < <(
+    smartctl --scan | awk '
+    /megaraid/ {
+      for (i=1;i<=NF;i++) {
+        if ($i=="-d") print $1, $(i+1)
+      }
+    }'
+)
 
 exit $bad
