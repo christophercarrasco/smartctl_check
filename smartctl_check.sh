@@ -1,13 +1,21 @@
 #!/bin/bash
 
+set -o pipefail
+
 bad=0
-DEV=/dev/sda     # wrapper MegaRAID
-MAX=32           # ajusta si tienes más discos
 
-for i in $(seq 0 $MAX); do
-    out=$(smartctl -a -d megaraid,$i $DEV 2>/dev/null) || continue
+smartctl --scan | awk '
+/-d megaraid,[0-9]+/ {
+  dev=$1
+  for (i=1;i<=NF;i++) {
+    if ($i=="-d") print dev, $(i+1)
+  }
+}' | while read dev mr; do
+    idx=${mr#megaraid,}
 
-    # validar que sea un disco real
+    out=$(smartctl -a -d megaraid,$idx "$dev" 2>/dev/null) || continue
+
+    # validar disco real
     echo "$out" | grep -q "Device Model" || continue
 
     status="OK"
@@ -24,7 +32,7 @@ for i in $(seq 0 $MAX); do
         [[ "$val" =~ ^[0-9]+$ && "$val" -gt 0 ]] && status="BAD"
     done
 
-    echo "[$status] $DEV megaraid,$i"
+    echo "[$status] $dev megaraid,$idx"
 
     [[ "$status" == "BAD" ]] && bad=1
 done
