@@ -133,7 +133,7 @@ echo -e "WARNINGS: $warn_count"
 # Resumen de discos críticos
 # =========================
 if [ ${#critical_disks[@]} -gt 0 ]; then
-    echo -e "\n--- CRITICAL DISKS (REQUIERE REEMPLAZO INMEDIATO) ---"
+    echo -e "\n--- CRITICAL DISKS (REQUIRES IMMEDIATE REPLACEMENT) ---"
     for d in "${critical_disks[@]}"; do
         echo "- $d"
     done
