@@ -115,7 +115,7 @@ while read -r dev mr; do
     esac
 
     # Output humano
-    printf "${color}%-10s\033[0m %-8s %-6s %-10s %-6s %-7s %-6s %-6s %-15s %-20s\n" \
+    printf "${color}%-10s\033[0m %-8s %-6s %-10s %-6s %-7s %-6s %-6s %-20s %-25s\n" \
         "[$status]" "ID:$idx" "${life}%" "$hours" "$crc_err" "$realloc" "$unsafe_pwr" "${temp}C" "$model" "$serial"
 
     # JSON machine-readable
