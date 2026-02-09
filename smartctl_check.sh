@@ -1,75 +1,134 @@
 #!/bin/bash
 
-bad_count=0
-total_disks=0
-summary=""
+# =========================
+# STORAGE HEALTH AUDIT
+# SAP / HANA STRICT MODE
+# =========================
 
+LIFE_THRESHOLD=10
+WARN_CRC_THRESHOLD=1
+
+bad_count=0
+warn_count=0
+total_disks=0
+report_data=""
+
+# Detectamos todos los dispositivos megaraid
 devices=$(smartctl --scan | awk '/megaraid/ {for (i=1;i<=NF;i++) if ($i=="-d") print $1, $(i+1)}')
 
-echo "--- ANALIZANDO SALUD FÍSICA Y DESGASTE ---"
-printf "%-7s %-10s %-8s %-12s %-10s %-10s\n" "ESTADO" "ID" "VIDA %" "HORAS" "CRC_ERR" "MODELO"
-echo "--------------------------------------------------------------------------"
+echo "--- STORAGE HEALTH SYSTEM AUDIT (STRICT MODE) ---"
+printf "%-10s %-8s %-6s %-10s %-6s %-7s %-6s %-6s %-15s\n" \
+"STATUS" "ID" "LIFE%" "HOURS" "CRC" "REALLOC" "PWR" "TEMP" "MODEL"
+echo "---------------------------------------------------------------------------------------------"
 
 while read -r dev mr; do
     idx=${mr#megaraid,}
     ((total_disks++))
-    
-    out=$(smartctl -x -d megaraid,"$idx" "$dev" 2>/dev/null)
+
+    out=$(smartctl -a -d megaraid,"$idx" "$dev" 2>/dev/null)
     [[ -z "$out" ]] && continue
 
-    # Extraer Datos Clave
     model=$(echo "$out" | grep -Ei "Device Model|Model Number" | awk -F: '{print $2}' | xargs)
-    hours=$(echo "$out" | grep "Power_On_Hours" | awk '{print $10}')
-    life=$(echo "$out" | grep -E "Percent_Lifetime_Remain|Percentage_Used_Endurance" | awk '{print $10}')
-    crc_err=$(echo "$out" | grep -i "Interface_CRC_Error_Count" | awk '{print $10}')
-    [[ -z "$crc_err" ]] && crc_err=0
-    
-    # Lógica de Salud
+
+    # Horas encendido (ID 9)
+    hours=$(echo "$out" | grep -E "^\s*9\s+" | awk '{print $10}')
+
+    # Vida útil
+    if [[ "$model" == *"SAMSUNG"* ]]; then
+        raw_life=$(echo "$out" | grep -E "^\s*177\s+" | awk '{print $4}')
+    else
+        raw_life=$(echo "$out" | grep -E "^\s*202\s+" | awk '{print $10}')
+    fi
+    life=$(echo "$raw_life" | sed 's/^0*//')
+    [[ -z "$life" ]] && life=100
+
+    # Errores básicos
+    crc_err=$(echo "$out" | grep -E "^\s*199\s+" | awk '{print $10}')
+    realloc=$(echo "$out" | grep -E "^\s*5\s+" | awk '{print $10}')
+
+    # Media / Data integrity
+    media_err=$(echo "$out" | grep -Ei "Media and Data Integrity Errors" | awk '{print $NF}')
+
+    # Unsafe shutdowns
+    unsafe_pwr=$(echo "$out" | grep -Ei "Unsafe_Shutdowns|Unsafe Shutdowns" | awk '{print $NF}')
+
+    # Temperatura
+    temp=$(echo "$out" | grep -Ei "Temperature_Celsius" | awk '{print $10}')
+
+    # Total Writes / TBW
+    tbw_raw=$(echo "$out" | grep -Ei "Total_LBAs_Written|Host_Writes|Data_Units_Written" | awk '{print $10}' | head -n1)
+
+    # TBW específico Micron 5200 (atributo 246)
+    if [[ "$model" == *"Micron"* ]]; then
+        tbw_raw=$(echo "$out" | grep -E "^\s*246\s+" | awk '{print $10}')
+    fi
+
+    # Sanitización
+    [[ ! "$hours" =~ ^[0-9]+$ ]] && hours=0
+    [[ ! "$crc_err" =~ ^[0-9]+$ ]] && crc_err=0
+    [[ ! "$realloc" =~ ^[0-9]+$ ]] && realloc=0
+    [[ ! "$media_err" =~ ^[0-9]+$ ]] && media_err=0
+    [[ ! "$unsafe_pwr" =~ ^[0-9]+$ ]] && unsafe_pwr=0
+    [[ ! "$temp" =~ ^[0-9]+$ ]] && temp=0
+    [[ ! "$tbw_raw" =~ ^[0-9]+$ ]] && tbw_raw=0
+
+    # Conversión aproximada a TB (suponiendo 512B por unidad)
+    tbw_tb=$(( tbw_raw * 512 / 1024 / 1024 / 1024 / 1024 ))
+
+    # =========================
+    # LÓGICA DE ESTADO
+    # =========================
+
     status="OK"
-    reasons=""
+    flags=""
 
-    # 1. Alerta por Desgaste (Menos del 10% de vida)
-    if [[ "$life" =~ ^[0-9]+$ && "$life" -le 10 ]]; then
-        status="BAD"
-        reasons+="[Desgaste: ${life}% restante] "
+    if (( 10#$life <= LIFE_THRESHOLD )); then
+        status="FAIL"; flags+="LOW_LIFE "
     fi
 
-    # 2. Alerta por Sectores Reasignados
-    realloc=$(echo "$out" | grep "Reallocated_Sector_Ct" | awk '{print $10}')
-    if [[ "$realloc" -gt 0 ]]; then
-        status="BAD"
-        reasons+="[Sectores Dañados: $realloc] "
+    if (( realloc > 0 )); then
+        status="FAIL"; flags+="REALLOC "
     fi
 
-    # 3. Alerta por Timeouts (Resets)
-    timeouts=$(echo "$out" | grep "Command_Timeout" | awk '{print $10}')
-    if [[ "$timeouts" -gt 0 ]]; then
-        status="WARN"
-        reasons+="[Timeouts: $timeouts] "
+    if (( media_err > 0 )); then
+        status="FAIL"; flags+="MEDIA_ERR "
     fi
 
-    # Formatear salida de tabla
-    color="\e[32m" # Verde
-    [[ "$status" == "WARN" ]] && color="\e[33m" # Amarillo
-    [[ "$status" == "BAD" ]] && color="\e[31m"  # Rojo
-    
-    printf "${color}%-7s\e[0m %-10s %-8s %-12s %-10s %-10s\n" \
-           "[$status]" "ID:$idx" "${life}%" "$hours" "$crc_err" "$model"
+    if (( unsafe_pwr > 0 )) && [ "$status" == "OK" ]; then
+        status="WARN"; flags+="UNSAFE_PWR "
+    fi
 
-    if [ "$status" != "OK" ]; then
+    if (( crc_err >= WARN_CRC_THRESHOLD )) && [ "$status" == "OK" ]; then
+        status="WARN"; flags+="CRC_WARN "
+    fi
+
+    # Contadores
+    if [ "$status" == "FAIL" ]; then
         ((bad_count++))
-        summary+=" - ID $idx: $reasons\n"
+    elif [ "$status" == "WARN" ]; then
+        ((warn_count++))
     fi
+
+    # Colores
+    case "$status" in
+        OK)   color="\033[0;32m" ;;
+        WARN) color="\033[0;33m" ;;
+        FAIL) color="\033[0;31m" ;;
+    esac
+
+    # Output humano
+    printf "${color}%-10s\033[0m %-8s %-6s %-10s %-6s %-7s %-6s %-6s %-15s\n" \
+        "[$status]" "ID:$idx" "${life}%" "$hours" "$crc_err" "$realloc" "$unsafe_pwr" "${temp}C" "$model"
+
+    # JSON machine-readable
+    report_data+="{\"id\":$idx,\"model\":\"$model\",\"status\":\"$status\",\"life\":$life,\
+\"hours\":$hours,\"crc\":$crc_err,\"realloc\":$realloc,\
+\"media_err\":$media_err,\"unsafe_pwr\":$unsafe_pwr,\
+\"temp\":$temp,\"tbw_tb\":$tbw_tb},"
 
 done <<< "$devices"
 
-# --- CONCLUSIÓN AUTOMATIZADA ---
-echo -e "\n--------------------------------------------------------------------------"
-if [ "$bad_count" -gt 0 ]; then
-    echo -e "\e[31mDIAGNÓSTICO FINAL:\e[0m"
-    echo -e "$summary"
-    echo -e "DEDUCCIÓN: Los discos han superado las 60,000 horas y tienen <10% de vida."
-    echo "Los errores de CRC están en 0, lo que descarta cables. ES OBSOLESCENCIA FÍSICA."
-else
-    echo -e "\e[32mDIAGNÓSTICO FINAL:\e[0m Todos los discos operan en rangos nominales."
-fi
+echo -e "\n--- MACHINE READABLE SUMMARY ---"
+echo -e "JSON_DATA: [${report_data%,}]"
+echo -e "AUDIT_SCORE: $((total_disks - bad_count))/$total_disks HEALTHY"
+echo -e "WARNINGS: $warn_count"
