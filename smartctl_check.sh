@@ -10,6 +10,7 @@ WARN_CRC_THRESHOLD=1
 
 bad_count=0
 warn_count=0
+critical_disks=()
 total_disks=0
 report_data=""
 
@@ -33,9 +34,9 @@ while read -r dev mr; do
     # Horas encendido (ID 9)
     hours=$(echo "$out" | grep -E "^\s*9\s+" | awk '{print $10}')
 
-    # ==========================================
-    # Lógica específica por fabricante (LIFE y TBW)
-    # ==========================================
+    # =========================================
+    # Lógica Específica por Fabricante (Vida y TBW)
+    # =========================================
     if [[ "$model" == *"SAMSUNG"* ]]; then
         raw_life=$(echo "$out" | grep -E "^\s*177\s+" | awk '{print $4}')
         tbw_raw=$(echo "$out" | grep -E "^\s*241\s+" | awk '{print $10}')
@@ -78,42 +79,37 @@ while read -r dev mr; do
     # =========================
     # LÓGICA DE ESTADO
     # =========================
-
     status="OK"
     flags=""
 
-    if (( 10#$life <= LIFE_THRESHOLD )); then
-        status="FAIL"; flags+="LOW_LIFE "
-    fi
-
-    if (( realloc > 0 )); then
-        status="FAIL"; flags+="REALLOC "
-    fi
-
-    if (( media_err > 0 )); then
-        status="FAIL"; flags+="MEDIA_ERR "
-    fi
-
-    if (( unsafe_pwr > 0 )) && [ "$status" == "OK" ]; then
-        status="WARN"; flags+="UNSAFE_PWR "
-    fi
-
-    if (( crc_err >= WARN_CRC_THRESHOLD )) && [ "$status" == "OK" ]; then
-        status="WARN"; flags+="CRC_WARN "
+    # Nivel crítico: LIFE bajo o REALLOC > 0
+    if (( 10#$life <= LIFE_THRESHOLD )) || (( realloc > 0 )); then
+        status="CRITICAL"
+        flags+="LOW_LIFE/REALLOC "
+        critical_disks+=("ID:$idx ($model)")
+    elif (( media_err > 0 )); then
+        status="FAIL"
+        flags+="MEDIA_ERR "
+    elif (( unsafe_pwr > 0 )); then
+        status="WARN"
+        flags+="UNSAFE_PWR "
+    elif (( crc_err >= WARN_CRC_THRESHOLD )); then
+        status="WARN"
+        flags+="CRC_WARN "
     fi
 
     # Contadores
-    if [ "$status" == "FAIL" ]; then
-        ((bad_count++))
-    elif [ "$status" == "WARN" ]; then
-        ((warn_count++))
-    fi
+    case "$status" in
+        CRITICAL|FAIL) ((bad_count++)) ;;
+        WARN) ((warn_count++)) ;;
+    esac
 
     # Colores
     case "$status" in
-        OK)   color="\033[0;32m" ;;
+        OK) color="\033[0;32m" ;;
         WARN) color="\033[0;33m" ;;
         FAIL) color="\033[0;31m" ;;
+        CRITICAL) color="\033[1;41m" ;; # rojo con fondo para resaltar
     esac
 
     # Output humano
@@ -132,3 +128,13 @@ echo -e "\n--- MACHINE READABLE SUMMARY ---"
 echo -e "JSON_DATA: [${report_data%,}]"
 echo -e "AUDIT_SCORE: $((total_disks - bad_count))/$total_disks HEALTHY"
 echo -e "WARNINGS: $warn_count"
+
+# =========================
+# Resumen de discos críticos
+# =========================
+if [ ${#critical_disks[@]} -gt 0 ]; then
+    echo -e "\n--- CRITICAL DISKS (REQUIERE REEMPLAZO INMEDIATO) ---"
+    for d in "${critical_disks[@]}"; do
+        echo "- $d"
+    done
+fi
