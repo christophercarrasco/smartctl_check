@@ -200,7 +200,7 @@ while read -r dev mr; do
     if (( 10#$life <= LIFE_THRESHOLD )) || (( realloc > 0 )); then
         status="CRITICAL"
         flags+="LOW_LIFE/REALLOC "
-        critical_disks+=("ID:$idx ($model $serial)")
+        critical_disks+=("ID:$idx [SLOT:$slot] ($model $serial)")
     elif (( media_err > 0 )); then
         status="FAIL"
         flags+="MEDIA_ERR "
