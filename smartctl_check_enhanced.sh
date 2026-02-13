@@ -4,7 +4,11 @@
 # =========================
 # CONFIGURATION
 # =========================
-LIFE_THRESHOLD=10
+LIFE_THRESHOLD=10 # Legacy fallback
+LIFE_CRITICAL=30
+LIFE_WARN=60
+REALLOC_CRITICAL=5
+REALLOC_WARN=1
 WARN_CRC_THRESHOLD=1
 STORCLI_URL="https://download.lenovo.com/servers/mig/2025/03/26/62030/lnvgy_utl_raid_mr3.storcli-007.3007.0000.0000-2_linux_x86-64-cfc.tgz"
 STORCLI_BIN="/opt/MegaRAID/storcli/storcli64"
@@ -130,18 +134,16 @@ for arg in "$@"; do
     esac
 done
 
-# ... (rest of the script)
-
 # =========================
 # Detectamos todos los dispositivos megaraid
 # =========================
 devices=$(smartctl --scan | awk '/megaraid/ {for (i=1;i<=NF;i++) if ($i=="-d") print $1","$(i+1)}')
 
 if [[ "$SHOW_JSON" != "true" ]]; then
-    echo "--- STORAGE HEALTH SYSTEM AUDIT (STRICT MODE) ---"
-    printf "%-10s %-8s %-6s %-10s %-6s %-7s %-6s %-6s %-20s %-10s %-25s\n" \
-    "STATUS" "ID" "LIFE%" "HOURS" "CRC" "REALLOC" "PWR" "TEMP" "SERIAL" "SLOT" "MODEL"
-    echo "----------------------------------------------------------------------------------------------------------------------------"
+    echo "--- STORAGE HEALTH SYSTEM AUDIT (STRICT MODE - HYBRID LOGIC) ---"
+    printf "%-10s %-8s %-6s %-10s %-6s %-7s %-7s %-6s %-20s %-10s %-25s\n" \
+    "STATUS" "ID" "LIFE%" "HOURS" "CRC" "REALLOC" "PENDING" "UNCORR" "SERIAL" "SLOT" "MODEL"
+    echo "------------------------------------------------------------------------------------------------------------------------------------"
 fi
 
 # Using for loop to avail subshell issue
@@ -156,7 +158,6 @@ for device_entry in $devices; do
     # mr variable expected by logic (megaraid,N)
     mr="$mr_part"
     
-    # Existing logic continues below...
     idx=${mr#megaraid,}
     ((total_disks++))
 
@@ -165,8 +166,7 @@ for device_entry in $devices; do
     if [[ -z "$out" ]]; then
         continue
     fi
-     
-    # Parsing logic remains the same...
+
     model=$(echo "$out" | grep -Ei "Device Model|Model Number" | awk -F: '{print $2}' | xargs)
     serial=$(echo "$out" | grep -Ei "Serial Number|Serial No." | awk -F: '{print $2}' | xargs)
     [[ -z "$serial" ]] && serial="UNKNOWN"
@@ -191,11 +191,13 @@ for device_entry in $devices; do
     life=$(echo "$raw_life" | sed 's/^0*//')
     [[ -z "$life" ]] && life=100
 
-    # Errores básicos
+    # Attributes Extraction
     crc_err=$(echo "$out" | grep -E "^\s*199\s+" | awk '{print $10}')
     realloc=$(echo "$out" | grep -E "^\s*5\s+" | awk '{print $10}')
-
-    # Media / Data integrity
+    pending=$(echo "$out" | grep -E "^\s*197\s+" | awk '{print $10}')
+    uncorrectable=$(echo "$out" | grep -E "^\s*198\s+" | awk '{print $10}')
+    
+    # Media / Data integrity (NVMe specific mostly, but check anyway)
     media_err=$(echo "$out" | grep -Ei "Media and Data Integrity Errors" | awk '{print $NF}')
 
     # Unsafe shutdowns
@@ -204,10 +206,12 @@ for device_entry in $devices; do
     # Temperatura
     temp=$(echo "$out" | grep -Ei "Temperature_Celsius" | awk '{print $10}')
 
-    # Sanitización
+    # Sanitización de variables (default a 0 si no son números)
     [[ ! "$hours" =~ ^[0-9]+$ ]] && hours=0
     [[ ! "$crc_err" =~ ^[0-9]+$ ]] && crc_err=0
     [[ ! "$realloc" =~ ^[0-9]+$ ]] && realloc=0
+    [[ ! "$pending" =~ ^[0-9]+$ ]] && pending=0
+    [[ ! "$uncorrectable" =~ ^[0-9]+$ ]] && uncorrectable=0
     [[ ! "$media_err" =~ ^[0-9]+$ ]] && media_err=0
     [[ ! "$unsafe_pwr" =~ ^[0-9]+$ ]] && unsafe_pwr=0
     [[ ! "$temp" =~ ^[0-9]+$ ]] && temp=0
@@ -222,32 +226,58 @@ for device_entry in $devices; do
     slot=$(get_disk_slot "$serial")
 
     # =========================
-    # LÓGICA DE ESTADO
+    # LÓGICA DE ESTADO (Híbrida / HANA inspired)
     # =========================
     status="OK"
     flags=""
 
-    # Nivel crítico: LIFE bajo o REALLOC > 0
-    if (( 10#$life <= LIFE_THRESHOLD )) || (( realloc > 0 )); then
+    # --- CRITICAL CONDITIONS ---
+    # 1. Life < 30%
+    # 2. Realloc > 5 (High realloc count)
+    # 3. Pending > 0 (Unstable sectors)
+    # 4. Uncorrectable > 0 (Data corruption)
+    if (( 10#$life < LIFE_CRITICAL )); then
         status="CRITICAL"
-        flags+="LOW_LIFE/REALLOC "
-        critical_disks+=("ID:$idx [SLOT:$slot] ($model $serial)")
+        flags+="LOW_LIFE "
+    elif (( realloc > REALLOC_CRITICAL )); then
+        status="CRITICAL"
+        flags+="HIGH_REALLOC "
+    elif (( pending > 0 )); then
+        status="CRITICAL"
+        flags+="PENDING_SECTORS "
+    elif (( uncorrectable > 0 )); then
+        status="CRITICAL"
+        flags+="UNCORR_ERRORS "
     elif (( media_err > 0 )); then
-        status="FAIL"
+        status="FAIL" # NVMe critical failure
         flags+="MEDIA_ERR "
-    elif (( unsafe_pwr > 0 )); then
+        
+    # --- WARNING CONDITIONS ---
+    # 1. Life between 30% and 60%
+    # 2. Realloc between 1 and 5
+    # 3. CRC Errors > 0
+    # 4. Unsafe Shutdowns > 0
+    elif (( 10#$life < LIFE_WARN )); then
         status="WARN"
-        flags+="UNSAFE_PWR "
+        flags+="LIFE_WARN "
+    elif (( realloc >= REALLOC_WARN )); then
+        status="WARN"
+        flags+="REALLOC_WARN "
     elif (( crc_err >= WARN_CRC_THRESHOLD )); then
         status="WARN"
         flags+="CRC_WARN "
+    elif (( unsafe_pwr > 0 )); then
+        status="WARN"
+        flags+="UNSAFE_PWR "
     fi
 
-    # Contadores
-    case "$status" in
-        CRITICAL|FAIL) ((bad_count++)) ;;
-        WARN) ((warn_count++)) ;;
-    esac
+    # Update global counters and lists
+    if [[ "$status" == "CRITICAL" ]] || [[ "$status" == "FAIL" ]]; then
+        ((bad_count++))
+        critical_disks+=("ID:$idx [SLOT:$slot] ($model $serial) - FLAGS: $flags")
+    elif [[ "$status" == "WARN" ]]; then
+        ((warn_count++))
+    fi
 
     # Colores
     case "$status" in
@@ -259,15 +289,15 @@ for device_entry in $devices; do
 
     # Output humano (ONLY if not JSON mode)
     if [[ "$SHOW_JSON" != "true" ]]; then
-        printf "${color}%-10s\033[0m %-8s %-6s %-10s %-6s %-7s %-6s %-6s %-20s %-10s %-25s\n" \
-            "[$status]" "ID:$idx" "${life}%" "$hours" "$crc_err" "$realloc" "$unsafe_pwr" "${temp}C" "$serial" "$slot" "$model"
+        printf "${color}%-10s\033[0m %-8s %-6s %-10s %-6s %-7s %-7s %-6s %-20s %-10s %-25s\n" \
+            "[$status]" "ID:$idx" "${life}%" "$hours" "$crc_err" "$realloc" "$pending" "$uncorrectable" "$serial" "$slot" "$model"
     fi
 
-    # JSON machine-readable (now includes slot)
+    # JSON machine-readable
     report_data+="{\"id\":$idx,\"model\":\"$model\",\"serial\":\"$serial\",\"status\":\"$status\",\"life\":$life,\
-\"hours\":$hours,\"crc\":$crc_err,\"realloc\":$realloc,\
+\"hours\":$hours,\"crc\":$crc_err,\"realloc\":$realloc,\"pending\":$pending,\"uncorrectable\":$uncorrectable,\
 \"media_err\":$media_err,\"unsafe_pwr\":$unsafe_pwr,\
-\"temp\":$temp,\"tbw_tb\":$tbw_tb,\"slot\":\"$slot\"},"
+\"temp\":$temp,\"tbw_tb\":$tbw_tb,\"slot\":\"$slot\",\"flags\":\"$flags\"},"
 
 done
 unset IFS
