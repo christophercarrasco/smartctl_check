@@ -3,62 +3,50 @@
 PERCCLI_DIR="/opt/lsi/perccli"
 PERCCLI="$PERCCLI_DIR/perccli"
 
-export LD_LIBRARY_PATH=$PERCCLI_DIR:$LD_LIBRARY_PATH
-
-TMPRAW="/tmp/diskraw.txt"
-TMPCRIT="/tmp/crit.txt"
+cd $PERCCLI_DIR || { echo "No se puede acceder a $PERCCLI_DIR"; exit 1; }
 
 echo "STATUS     ID       LIFE%  HOURS      CRC    REALLOC PENDING UNCORR SERIAL               SLOT       MODEL"
 echo "------------------------------------------------------------------------------------------------------------------------------------"
 
-# Generar salida parseable
-$PERCCLI /c0 /eall /sall show all J 2>/dev/null | \
-grep -E '"EID:Slt"|\"Model\"|\"SN\"|\"Media Error Count\"|\"Predictive Failure Count\"|\"Power On Hours\"|\"Percent Life Remaining\"' \
-> $TMPRAW
+TMPRAW="/tmp/diskraw.txt"
+TMPCRIT="/tmp/crit.txt"
+
+# Ejecutamos perccli desde su directorio
+$PERCCLI /c0 /eall /sall show all > $TMPRAW 2>/dev/null
 
 id=0
+slot=""
+model=""
+sn=""
+hours=0
+crc=0
+realloc=0
+life=100
 
-awk '
-/"EID:Slt"/ {slot=$3}
-/"Model"/ {model=$3}
-/"SN"/ {sn=$3}
-/"Power On Hours"/ {hours=$4}
-/"Media Error Count"/ {crc=$4}
-/"Predictive Failure Count"/ {realloc=$4}
-/"Percent Life Remaining"/ {
-life=$4
-status="OK"
-flags=""
-
-if (life+0 < 20) {
-    status="[CRITICAL]"
-    flags="LOW_LIFE"
-}
-
-if (realloc+0 > 50) {
-    status="[CRITICAL]"
-    flags="HIGH_REALLOC"
-}
-
-printf "%-10s ID:%-5d %-6s %-10s %-6s %-7s %-7s %-6s %-20s %-10s %s\n",
-status, id, life"%", hours, crc, realloc, 0, 0, sn, slot, model
-
-if (status=="[CRITICAL]") {
-    printf "- ID:%d [SLOT:%s] (%s %s) - FLAGS: %s\n", id, slot, model, sn, flags >> "'$TMPCRIT'"
-}
-
-id++
-}
-' $TMPRAW
+while read line; do
+    echo "$line" | grep -q "EID:Slt" && slot=$(echo $line | awk '{print $1}')
+    echo "$line" | grep -q "Model =" && model=$(echo $line | awk -F'= ' '{print $2}')
+    echo "$line" | grep -q "SN =" && sn=$(echo $line | awk -F'= ' '{print $2}')
+    echo "$line" | grep -q "Power On Hours =" && hours=$(echo $line | awk -F'= ' '{print $2}')
+    echo "$line" | grep -q "Media Error Count =" && crc=$(echo $line | awk -F'= ' '{print $2}')
+    echo "$line" | grep -q "Predictive Failure Count =" && realloc=$(echo $line | awk -F'= ' '{print $2}')
+done < $TMPRAW
 
 echo ""
 echo "--- CRITICAL DISKS (REQUIRES IMMEDIATE REPLACEMENT) ---"
+echo "⚠️ Nota: PERC H730P no expone LIFE% de SSD bajo RAID"
+echo "Sólo se muestran errores predictivos y media errors"
 
-if [ -f $TMPCRIT ]; then
-    cat $TMPCRIT
-    rm -f $TMPCRIT
-else
-    echo "None"
-fi
+# Mostrar estado básico de errores
+awk -v id=0 -v tmp="$TMPRAW" '
+/EID:Slt/ {slot=$1}
+/SN =/ {sn=$3}
+/Model =/ {model=$3}
+/Media Error Count =/ {crc=$5}
+/Predictive Failure Count =/ {realloc=$5}
+END {
+    printf "ID:%d SLOT:%s MODEL:%s SN:%s CRC:%s PREDICTIVE:%s\n", id, slot, model, sn, crc, realloc
+}
+' $TMPRAW
 
 rm -f $TMPRAW
