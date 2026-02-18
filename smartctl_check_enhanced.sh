@@ -11,7 +11,16 @@ REALLOC_CRITICAL=5
 REALLOC_WARN=1
 WARN_CRC_THRESHOLD=1
 STORCLI_URL="https://download.lenovo.com/servers/mig/2025/03/26/62030/lnvgy_utl_raid_mr3.storcli-007.3007.0000.0000-2_linux_x86-64-cfc.tgz"
-STORCLI_BIN="/opt/MegaRAID/storcli/storcli64"
+# Detect StorCLI binary location (check multiple paths)
+if [[ -x "/opt/MegaRAID/storcli/storcli64" ]]; then
+    STORCLI_BIN="/opt/MegaRAID/storcli/storcli64"
+elif [[ -x "/usr/sbin/storcli64" ]]; then
+    STORCLI_BIN="/usr/sbin/storcli64"
+elif [[ -x "/usr/sbin/storcli" ]]; then
+    STORCLI_BIN="/usr/sbin/storcli"
+else
+    STORCLI_BIN="/opt/MegaRAID/storcli/storcli64"  # default fallback
+fi
 
 bad_count=0
 warn_count=0
@@ -25,8 +34,8 @@ report_data=""
 
 # Download and install StorCLI if not present
 install_storcli() {
-    # Check if already installed
-    if [[ -x "$STORCLI_BIN" ]]; then
+    # Check if already installed in any known location
+    if [[ -x "/opt/MegaRAID/storcli/storcli64" ]] || [[ -x "/usr/sbin/storcli64" ]] || [[ -x "/usr/sbin/storcli" ]]; then
         return 0
     fi
     
