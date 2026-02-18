@@ -14,8 +14,8 @@ STORCLI_URL="https://download.lenovo.com/servers/mig/2025/03/26/62030/lnvgy_utl_
 # Detect StorCLI binary location (check multiple paths)
 if [[ -x "/opt/MegaRAID/storcli/storcli64" ]]; then
     STORCLI_BIN="/opt/MegaRAID/storcli/storcli64"
-elif [[ -x "/usr/sbin/storcli64" ]]; then
-    STORCLI_BIN="/usr/sbin/storcli64"
+elif [[ -x "/usr/local/bin/storcli" ]]; then
+    STORCLI_BIN="/usr/local/bin/storcli"
 elif [[ -x "/usr/sbin/storcli" ]]; then
     STORCLI_BIN="/usr/sbin/storcli"
 else
