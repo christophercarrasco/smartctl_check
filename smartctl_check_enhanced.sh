@@ -34,8 +34,8 @@ report_data=""
 
 # Download and install StorCLI if not present
 install_storcli() {
-    # Check if already installed in any known location
-    if [[ -x "/opt/MegaRAID/storcli/storcli64" ]] || [[ -x "/usr/sbin/storcli64" ]] || [[ -x "/usr/sbin/storcli" ]]; then
+    # Check if already installed (STORCLI_BIN was resolved at startup)
+    if [[ -x "$STORCLI_BIN" ]]; then
         return 0
     fi
     
