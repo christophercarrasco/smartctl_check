@@ -170,9 +170,21 @@ for device_entry in $devices; do
     idx=${mr#megaraid,}
     ((total_disks++))
 
-    out=$(smartctl -a -d megaraid,"$idx" "$dev" 2>/dev/null)
-    # Check if out is empty or smartctl failed
-    if [[ -z "$out" ]]; then
+    # Capture both stdout and stderr to detect read failures
+    out=$(smartctl -a -d megaraid,"$idx" "$dev" 2>&1)
+    exit_code=$?
+
+    # Check if smartctl failed to read the device (empty output or INQUIRY failed)
+    if [[ -z "$out" ]] || echo "$out" | grep -qiE "INQUIRY failed|open device.*failed|Unable to detect device type"; then
+        # Report the unreadable disk instead of silently skipping it
+        if [[ "$SHOW_JSON" != "true" ]]; then
+            printf "\033[0;33m%-10s\033[0m %-8s %-6s %-10s %-6s %-7s %-7s %-6s %-20s %-10s %-25s\n" \
+                "[UNREAD]" "ID:$idx" "N/A" "N/A" "N/A" "N/A" "N/A" "N/A" "UNKNOWN" "N/A" "UNREADABLE DEVICE"
+        fi
+        report_data+="{\"id\":$idx,\"model\":\"\",\"serial\":\"UNKNOWN\",\"status\":\"UNREADABLE\",\"life\":0,\
+\"hours\":0,\"crc\":0,\"realloc\":0,\"pending\":0,\"uncorrectable\":0,\
+\"media_err\":0,\"unsafe_pwr\":0,\
+\"temp\":0,\"tbw_tb\":0,\"slot\":\"N/A\",\"flags\":\"INQUIRY_FAILED\"},"
         continue
     fi
 
@@ -186,14 +198,53 @@ for device_entry in $devices; do
     # =========================================
     # Lógica Específica por Fabricante (Vida y TBW)
     # =========================================
-    if [[ "$model" == *"SAMSUNG"* ]]; then
+    if [[ "$model" == *"SAMSUNG"* || "$model" == *"MZ7L"* || "$model" == *"MZ7G"* ]]; then
+        # Samsung: Attr 177 Wear_Leveling_Count VALUE = % remaining (100=new, 0=dead)
         raw_life=$(echo "$out" | grep -E "^\s*177\s+" | awk '{print $4}')
         tbw_raw=$(echo "$out" | grep -E "^\s*241\s+" | awk '{print $10}')
-    elif [[ "$model" == *"TOSHIBA"* || "$model" == *"KHK61"* ]]; then
+    elif [[ "$model" == *"TOSHIBA"* || "$model" == *"KHK61"* || "$model" == *"THNSN"* || "$model" == *"THNSNJ"* ]]; then
+        # Toshiba: Attr 233 Media_Wearout_Indicator VALUE = % remaining
         raw_life=$(echo "$out" | grep -E "^\s*233\s+" | awk '{print $4}')
         tbw_raw=$(echo "$out" | grep -E "^\s*241\s+" | awk '{print $10}')
+    elif [[ "$model" == *"Micron"* || "$model" == *"MICRON"* || "$model" == *"MTFDDAK"* || "$model" == *"MTFDDAV"* || "$model" == *"MTFDDAK960TDS"* ]]; then
+        # Micron (all variants): Attr 202 VALUE = % remaining (RAW_VALUE is P/E cycle count, NOT a %)
+        raw_life=$(echo "$out" | grep -E "^\s*202\s+" | awk '{print $4}')
+        tbw_raw=$(echo "$out" | grep -E "^\s*241\s+" | awk '{print $10}')
+    elif [[ "$model" == *"INTEL"* || "$model" == *"SSDSC"* || "$model" == *"SSDPE"* ]]; then
+        # Intel: Attr 233 Media_Wearout_Indicator VALUE = % remaining
+        # Fallback to 232 Available_Reservd_Space if 233 not present
+        raw_life=$(echo "$out" | grep -E "^\s*233\s+" | awk '{print $4}')
+        if [[ -z "$raw_life" ]]; then
+            raw_life=$(echo "$out" | grep -E "^\s*232\s+" | awk '{print $4}')
+        fi
+        tbw_raw=$(echo "$out" | grep -E "^\s*241\s+" | awk '{print $10}')
+    elif [[ "$model" == *"HFS"* || "$model" == *"SK Hynix"* || "$model" == *"SKHynix"* ]]; then
+        # SK Hynix: Attr 177 Wear_Leveling_Count VALUE = % remaining
+        raw_life=$(echo "$out" | grep -E "^\s*177\s+" | awk '{print $4}')
+        if [[ -z "$raw_life" ]]; then
+            raw_life=$(echo "$out" | grep -E "^\s*233\s+" | awk '{print $4}')
+        fi
+        tbw_raw=$(echo "$out" | grep -E "^\s*241\s+" | awk '{print $10}')
+    elif [[ "$model" == *"SDLF"* || "$model" == *"XF1230"* ]]; then
+        # Western Digital / Seagate Nytro enterprise SSDs
+        # Attr 202 VALUE = % remaining
+        raw_life=$(echo "$out" | grep -E "^\s*202\s+" | awk '{print $4}')
+        tbw_raw=$(echo "$out" | grep -E "^\s*246\s+" | awk '{print $10}')
     else
-        raw_life=$(echo "$out" | grep -E "^\s*202\s+" | awk '{print $10}')
+        # Generic fallback: try attr 202 VALUE, then 233, then 177, then Device Statistics
+        raw_life=$(echo "$out" | grep -E "^\s*202\s+" | awk '{print $4}')
+        if [[ -z "$raw_life" || "$raw_life" == "0" ]]; then
+            raw_life=$(echo "$out" | grep -E "^\s*233\s+" | awk '{print $4}')
+        fi
+        if [[ -z "$raw_life" || "$raw_life" == "0" ]]; then
+            raw_life=$(echo "$out" | grep -E "^\s*177\s+" | awk '{print $4}')
+        fi
+
+        # Last resort: Device Statistics Percentage Used Endurance Indicator (invert: used->remaining)
+        if [[ -z "$raw_life" ]]; then
+            pct_used=$(echo "$out" | grep -i "Percentage Used Endurance Indicator" | awk '{print $NF}')
+            [[ "$pct_used" =~ ^[0-9]+$ ]] && raw_life=$(( 100 - pct_used ))
+        fi
         tbw_raw=$(echo "$out" | grep -E "^\s*246\s+" | awk '{print $10}')
     fi
 
