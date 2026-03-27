@@ -386,20 +386,24 @@ for device_entry in $devices; do
 
     # Normalizar escala 0-200 a porcentaje 0-100 (Toshiba THNSN, algunos enterprise)
     # VALUE del atributo arranca en 200 (nuevo) y el THRESH fabricante es típicamente < 10
+    # Convertir a entero base-10 limpio para evitar error de octal en bash (ej: "093")
+    life=$(( 10#$life + 0 ))
+    wear_worst=$(( 10#$wear_worst + 0 ))
+    wear_thresh=$(( 10#$wear_thresh + 0 ))
     if (( life > 100 )); then
         if (( wear_thresh > 0 && wear_thresh < 100 )); then
-            life=$(( (10#$life - wear_thresh) * 100 / (200 - wear_thresh) ))
+            life=$(( (life - wear_thresh) * 100 / (200 - wear_thresh) ))
         else
-            life=$(( 10#$life / 2 ))
+            life=$(( life / 2 ))
         fi
         (( life < 0 )) && life=0
         (( life > 100 )) && life=100
     fi
     if (( wear_worst > 100 )); then
         if (( wear_thresh > 0 && wear_thresh < 100 )); then
-            wear_worst=$(( (10#$wear_worst - wear_thresh) * 100 / (200 - wear_thresh) ))
+            wear_worst=$(( (wear_worst - wear_thresh) * 100 / (200 - wear_thresh) ))
         else
-            wear_worst=$(( 10#$wear_worst / 2 ))
+            wear_worst=$(( wear_worst / 2 ))
         fi
         (( wear_worst < 0 )) && wear_worst=0
         (( wear_worst > 100 )) && wear_worst=100
